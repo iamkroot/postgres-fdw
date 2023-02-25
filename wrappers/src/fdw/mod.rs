@@ -35,3 +35,9 @@ cfg_if! {
         mod airtable_fdw;
     }
 }
+
+cfg_if! {
+    if #[cfg(feature = "db721_fdw")] {
+        mod db721_fdw;
+    }
+}
