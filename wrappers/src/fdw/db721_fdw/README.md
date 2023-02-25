@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS farm
 (
     farm_name       varchar,
 --     sexes         varchar[],
-    min_age_weeks   float,
-    max_age_weeks   float
+    min_age_weeks   float4,
+    max_age_weeks   float4
 );
 
 CREATE TABLE IF NOT EXISTS chicken
@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS chicken
     farm_name       varchar,
     weight_model    varchar,
     sex             varchar,
-    age_weeks       float,
-    weight_g        float,
+    age_weeks       float4,
+    weight_g        float4,
     notes           varchar
 );
 
@@ -41,8 +41,8 @@ CREATE FOREIGN TABLE IF NOT EXISTS db721_farm
 (
     farm_name       varchar,
 --     sexes           varchar[],
-    min_age_weeks   float,
-    max_age_weeks   float
+    min_age_weeks   float4,
+    max_age_weeks   float4
 ) SERVER db721_server OPTIONS
 (
     filename '$CHANGE_THIS_PATH/data-farms.db721',
@@ -53,8 +53,8 @@ CREATE FOREIGN TABLE IF NOT EXISTS db721_chicken (
     farm_name       varchar,
     weight_model    varchar,
     sex             varchar,
-    age_weeks       float,
-    weight_g        float,
+    age_weeks       float4,
+    weight_g        float4,
     notes           varchar
 ) SERVER db721_server OPTIONS
 (

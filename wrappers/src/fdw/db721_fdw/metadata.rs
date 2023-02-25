@@ -8,21 +8,21 @@ use serde::{de, Deserialize, Deserializer};
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct BlockStats<T> {
-    num: u32,
-    min: T,
-    max: T,
+    pub(crate) num: u32,
+    pub(crate) min: T,
+    pub(crate) max: T,
     #[serde(default)]
-    min_len: u32,
+    pub(crate) min_len: u32,
     #[serde(default)]
-    max_len: u32,
+    pub(crate) max_len: u32,
 }
 
-pub(crate) type BSMap<T> = HashMap<usize, BlockStats<T>>;
+pub(crate) type BSMap<T> = HashMap<u32, BlockStats<T>>;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct BSS<T: for<'a> Deserialize<'a>> {
     #[serde(deserialize_with = "de_int_key")]
-    block_stats: BSMap<T>,
+    pub(crate) block_stats: BSMap<T>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -39,19 +39,37 @@ pub(crate) enum Stats {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Column {
     #[serde(flatten)]
-    block_stats: Stats,
-    num_blocks: u32,
-    start_offset: u32,
+    pub(crate) block_stats: Stats,
+    pub(crate) num_blocks: u32,
+    pub(crate) start_offset: u32,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Metadata {
     #[serde(rename = "Table")]
-    table_name: String,
+    pub(crate) table_name: String,
     #[serde(rename = "Columns")]
-    columns: HashMap<String, Column>,
+    pub(crate) columns: HashMap<String, Column>,
     #[serde(rename = "Max Values Per Block")]
-    max_vals_per_block: u32,
+    pub(crate) max_vals_per_block: u32,
+    #[serde(skip)]
+    pub(crate) num_rows: u64,
+}
+
+impl Metadata {
+    pub(crate) fn from_slice(slice: &[u8]) -> serde_json::Result<Self> {
+        let mut md: Self = serde_json::from_slice(slice)?;
+        let Some(col) = md.columns.values().next() else {
+            return Ok(md);
+        };
+        md.num_rows = match &col.block_stats {
+            Stats::Float(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
+            Stats::Int(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
+            Stats::Str(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
+        };
+
+        Ok(md)
+    }
 }
 
 /// Taken from https://github.com/serde-rs/json/issues/560#issuecomment-532054058
