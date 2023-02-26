@@ -132,7 +132,8 @@ impl ForeignDataWrapper for Db721Fdw {
             match &col.block_stats {
                 Stats::Float(_) => {
                     const FIELD_SIZE: usize = 4;
-                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let read_offset = col.start_offset as i64
+                        + FIELD_SIZE as i64 * (reader.row_cnt + reader.limit.offset);
                     let mut buf = [0; FIELD_SIZE];
                     if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
@@ -147,7 +148,8 @@ impl ForeignDataWrapper for Db721Fdw {
                 }
                 Stats::Int(_) => {
                     const FIELD_SIZE: usize = 4;
-                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let read_offset = col.start_offset as i64
+                        + FIELD_SIZE as i64 * (reader.row_cnt + reader.limit.offset);
                     let mut buf = [0; FIELD_SIZE];
                     if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
@@ -161,7 +163,8 @@ impl ForeignDataWrapper for Db721Fdw {
                 }
                 Stats::Str(_) => {
                     const FIELD_SIZE: usize = 32;
-                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let read_offset = col.start_offset as i64
+                        + FIELD_SIZE as i64 * (reader.row_cnt + reader.limit.offset);
                     let mut buf = [0; FIELD_SIZE];
                     if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
