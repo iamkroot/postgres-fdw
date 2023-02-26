@@ -45,13 +45,23 @@ impl Stats {
     }
 }
 
-
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Column {
     #[serde(flatten)]
     pub(crate) block_stats: Stats,
     pub(crate) num_blocks: u32,
     pub(crate) start_offset: u32,
+}
+
+impl Column {
+    #[allow(dead_code)]
+    pub(crate) fn field_size(&self) -> u32 {
+        match self.block_stats {
+            Stats::Float(_) => 4,
+            Stats::Int(_) => 4,
+            Stats::Str(_) => 32,
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -79,7 +89,13 @@ impl Metadata {
         }
     }
     pub(crate) fn num_rows_in_block(&self, block_num: u32) -> u32 {
-        self.columns.values().next().unwrap().block_stats.num_rows_in_block(block_num).unwrap()
+        self.columns
+            .values()
+            .next()
+            .unwrap()
+            .block_stats
+            .num_rows_in_block(block_num)
+            .unwrap()
     }
 }
 

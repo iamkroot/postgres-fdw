@@ -189,9 +189,12 @@ impl Db721Reader {
             .next()
             .unwrap()
             .num_blocks;
-
+        db721_file
+            .mmap
+            .advise(memmap2::Advice::Sequential)
+            .expect("madvise failed");
         let mut reader = Self {
-            mmap: unsafe { memmap2::Mmap::map(&db721_file.file).unwrap() },
+            mmap: db721_file.mmap,
             metadata: db721_file.metadata,
             num_blocks,
             cols: cols.to_vec(),
