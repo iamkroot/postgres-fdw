@@ -27,6 +27,48 @@ pub const FOREIGN_SERVER_RELATION_ID: pg_sys::Oid = 1417;
 /// Constant can be used in [validator](ForeignDataWrapper::validator)
 pub const FOREIGN_TABLE_RELATION_ID: pg_sys::Oid = 3118;
 
+/// Wrapper over a [pg_sys::varlena] pointer to represent strings
+/// backed by Postgres `CurrentMemoryContext`.
+///
+/// The user can call this to avoid allocating a [String] for [Cell::String]
+/// which will anyway be converted into [pg_sys::varlena] before being sent
+/// to pg.
+///
+/// This also means that the value will be lost as soon as the context
+/// is dropped. Should ideally only be used to _send_ the current tuple's
+/// cells to pg.
+pub struct PgString(pgx::PgBox<pg_sys::varlena>);
+
+impl PgString {
+    pub fn from_slice(slice: &[u8]) -> Self {
+        Self(pgx::varlena::rust_byte_slice_to_bytea(slice))
+    }
+}
+
+impl std::fmt::Debug for PgString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\"{}\"", unsafe {
+            pgx::text_to_rust_str_unchecked(self.0.as_ptr())
+        })
+    }
+}
+
+impl Clone for PgString {
+    fn clone(&self) -> Self {
+        Self(unsafe {
+            pgx::rust_byte_slice_to_bytea(pgx::varlena::varlena_to_byte_slice(self.0.as_ptr()))
+        })
+    }
+}
+
+impl std::fmt::Display for PgString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", unsafe {
+            pgx::text_to_rust_str_unchecked(self.0.as_ptr())
+        })
+    }
+}
+
 /// A data cell in a data row
 #[derive(Debug)]
 pub enum Cell {
@@ -38,6 +80,7 @@ pub enum Cell {
     F64(f64),
     I64(i64),
     String(String),
+    PgString(PgString),
     Date(Date),
     Timestamp(Timestamp),
     Json(JsonB),
@@ -57,6 +100,7 @@ impl Clone for Cell {
             Cell::Date(v) => Cell::Date(v.clone()),
             Cell::Timestamp(v) => Cell::Timestamp(v.clone()),
             Cell::Json(v) => Cell::Json(JsonB(v.0.clone())),
+            Cell::PgString(v) => Cell::PgString(v.clone()),
         }
     }
 }
@@ -75,6 +119,7 @@ impl fmt::Display for Cell {
             Cell::Date(v) => write!(f, "{:?}", v),
             Cell::Timestamp(v) => write!(f, "{:?}", v),
             Cell::Json(v) => write!(f, "{:?}", v),
+            Cell::PgString(v) => write!(f, "'{}'", v),
         }
     }
 }
@@ -93,6 +138,7 @@ impl IntoDatum for Cell {
             Cell::Date(v) => v.into_datum(),
             Cell::Timestamp(v) => v.into_datum(),
             Cell::Json(v) => v.into_datum(),
+            Cell::PgString(v) => v.0.into_datum(),
         }
     }
 
