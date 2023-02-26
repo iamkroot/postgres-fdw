@@ -103,10 +103,7 @@ impl CustomQual {
                 let PolyVal::Str(rhs) = &self.rhs else {
                     panic!("data type mismatch!");
                 };
-                let lhs = lhs.to_slice();
-                let lhs = unsafe { std::str::from_utf8_unchecked(&lhs[..lhs.len() - 1]) };
-                let res = self.op.eval(lhs, rhs.as_str());
-                log::trace!(target: "eval", "{lhs} {:?} {rhs} = {res}", self.op);
+                let res = self.op.eval(lhs.to_slice(), rhs.as_bytes());
                 res
             }
             _ => panic!(),
@@ -259,7 +256,7 @@ impl Db721Reader {
                 };
                 log::trace!(target: "db721_read", "str read offset {read_offset} {buf:?}");
                 let null_pos = buf.iter().position(|c| *c == 0).expect("No null char");
-                *v = PgString::from_slice(&buf[..null_pos + 1]);
+                *v = PgString::from_slice(&buf[..null_pos]);
             }
             _ => return None,
         }
@@ -430,6 +427,5 @@ impl ForeignDataWrapper for Db721Fdw {
 
     fn end_scan(&mut self) {
         self.reader.take();
-        // we do nothing here, but you can do things like resource cleanup and etc.
     }
 }
