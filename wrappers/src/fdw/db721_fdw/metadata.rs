@@ -52,23 +52,21 @@ pub(crate) struct Metadata {
     pub(crate) columns: HashMap<String, Column>,
     #[serde(rename = "Max Values Per Block")]
     pub(crate) max_vals_per_block: u32,
-    #[serde(skip)]
-    pub(crate) num_rows: u64,
 }
 
 impl Metadata {
     pub(crate) fn from_slice(slice: &[u8]) -> serde_json::Result<Self> {
-        let mut md: Self = serde_json::from_slice(slice)?;
-        let Some(col) = md.columns.values().next() else {
-            return Ok(md);
+        serde_json::from_slice(slice)
+    }
+    pub(crate) fn num_rows(&self) -> u64 {
+        let Some(col) = self.columns.values().next() else {
+            return 0;
         };
-        md.num_rows = match &col.block_stats {
+        match &col.block_stats {
             Stats::Float(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
             Stats::Int(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
             Stats::Str(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
-        };
-
-        Ok(md)
+        }
     }
 }
 

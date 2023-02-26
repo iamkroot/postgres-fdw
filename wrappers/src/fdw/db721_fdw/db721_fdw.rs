@@ -4,8 +4,8 @@ use std::os::unix::prelude::FileExt;
 use pgx::PgSqlErrorCode;
 use supabase_wrappers::prelude::*;
 
-use super::metadata::Stats;
-use super::parser::{parse_file, Db721File};
+use super::metadata::{Metadata, Stats};
+use super::parser::parse_file;
 
 // A simple demo FDW
 #[wrappers_fdw(
@@ -14,12 +14,65 @@ use super::parser::{parse_file, Db721File};
     website = "https://github.com/iamkroot/postgres-fdw/tree/db721/wrappers/src/fdw/db721_fdw"
 )]
 pub(crate) struct Db721Fdw {
-    // row counter
-    row_cnt: u64,
+    reader: Option<Db721Reader>,
+}
 
-    // target column name list
-    tgt_cols: Vec<String>,
-    db721_file: Option<Db721File>,
+struct Db721Reader {
+    file: std::fs::File,
+    metadata: Metadata,
+
+    // query specific
+    cols: Vec<String>,
+    limit: Limit,
+    _quals: Vec<Qual>,
+
+    // scan state
+    row_cnt: i64,
+}
+
+impl Db721Reader {
+    fn new(
+        filename: &str,
+        cols: &[String],
+        quals: &[Qual],
+        limit: &Option<Limit>,
+    ) -> Result<Self, ()> {
+        let db721_file = match parse_file(filename) {
+            Ok(f) => f,
+            Err(err) => {
+                report_error(
+                    PgSqlErrorCode::ERRCODE_FDW_ERROR,
+                    &format!("parse of DB721 file at {filename} failed: {err}"),
+                );
+                return Err(());
+            }
+        };
+        let num_rows = db721_file.metadata.num_rows() as i64;
+        let limit = limit
+            .clone()
+            .map(|Limit { count, offset }| {
+                if offset + count > num_rows {
+                    Limit {
+                        count: num_rows - offset,
+                        offset,
+                    }
+                } else {
+                    Limit { count, offset }
+                }
+            })
+            .unwrap_or_else(|| Limit {
+                count: num_rows,
+                offset: 0,
+            });
+        Ok(Self {
+            file: db721_file.file,
+            metadata: db721_file.metadata,
+            cols: cols.to_vec(),
+            limit,
+            _quals: quals.to_vec(),
+            row_cnt: 0,
+        })
+    }
 }
 
 impl ForeignDataWrapper for Db721Fdw {
@@ -44,19 +97,15 @@ impl ForeignDataWrapper for Db721Fdw {
         }
         log::trace!("init options: {_options:?}");
 
-        Self {
-            row_cnt: 0,
-            tgt_cols: Vec::new(),
-            db721_file: None,
-        }
+        Self { reader: None }
     }
 
     fn begin_scan(
         &mut self,
-        _quals: &[Qual],
+        quals: &[Qual],
         columns: &[String],
         _sorts: &[Sort],
-        _limit: &Option<Limit>,
+        limit: &Option<Limit>,
         options: &HashMap<String, String>,
     ) {
         log::trace!("scan options: {options:?}");
@@ -64,44 +113,28 @@ impl ForeignDataWrapper for Db721Fdw {
         let Some(filename) = require_option("filename", options) else {
             return;
         };
-        let db721_file = match parse_file(&filename) {
-            Ok(f) => f,
-            Err(err) => {
-                report_error(
-                    PgSqlErrorCode::ERRCODE_FDW_ERROR,
-                    &format!("parse of DB721 file at {filename} failed: {err}"),
-                );
-                return;
-            }
-        };
-
-        self.db721_file = Some(db721_file);
-        // reset row counter
-        self.row_cnt = 0;
-
-        // save a copy of target columns
-        self.tgt_cols = columns.to_vec();
+        self.reader = Db721Reader::new(&filename, columns, quals, limit).ok();
     }
 
     fn iter_scan(&mut self, row: &mut Row) -> Option<()> {
         // this is called on each row and we only return one row here
-        let Some(db721_file) = self.db721_file.as_mut() else {
+        let Some(reader) = self.reader.as_mut() else {
             return None;
         };
-        if self.row_cnt >= db721_file.metadata.num_rows {
+        if reader.row_cnt >= reader.limit.count {
             return None;
         }
-        // let tgt_block = (self.row_cnt / (db721_file.metadata.max_vals_per_block as u64)) as u32;
-        for colname in &self.tgt_cols {
-            let Some(col) = db721_file.metadata.columns.get(colname) else {
+        for colname in &reader.cols {
+            let Some(col) = reader.metadata.columns.get(colname) else {
                 return None;
             };
 
             match &col.block_stats {
                 Stats::Float(_) => {
-                    let read_offset = col.start_offset as u64 + 4 * self.row_cnt;
-                    let mut buf = [0; 4];
-                    if let Err(err) = db721_file.file.read_exact_at(&mut buf, read_offset) {
+                    const FIELD_SIZE: usize = 4;
+                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let mut buf = [0; FIELD_SIZE];
+                    if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
                             PgSqlErrorCode::ERRCODE_FDW_ERROR,
                             &format!("error reading f32 at offset {read_offset} bytes: {err}"),
@@ -113,9 +146,10 @@ impl ForeignDataWrapper for Db721Fdw {
                     row.push(colname, Some(Cell::F32(f)));
                 }
                 Stats::Int(_) => {
-                    let read_offset = col.start_offset as u64 + 4 * self.row_cnt;
-                    let mut buf = [0; 4];
-                    if let Err(err) = db721_file.file.read_exact_at(&mut buf, read_offset) {
+                    const FIELD_SIZE: usize = 4;
+                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let mut buf = [0; FIELD_SIZE];
+                    if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
                             PgSqlErrorCode::ERRCODE_FDW_ERROR,
                             &format!("error reading i32 at offset {read_offset} bytes: {err}"),
@@ -126,30 +160,31 @@ impl ForeignDataWrapper for Db721Fdw {
                     row.push(colname, Some(Cell::I32(i32::from_le_bytes(buf))));
                 }
                 Stats::Str(_) => {
-                    const FIELD_SIZE: u64 = 32;
-                    let read_offset = col.start_offset as u64 + FIELD_SIZE * self.row_cnt;
-                    let mut buf = [0; FIELD_SIZE as usize];
-                    if let Err(err) = db721_file.file.read_exact_at(&mut buf, read_offset) {
+                    const FIELD_SIZE: usize = 32;
+                    let read_offset = col.start_offset as i64 + FIELD_SIZE as i64 * reader.row_cnt;
+                    let mut buf = [0; FIELD_SIZE];
+                    if let Err(err) = reader.file.read_exact_at(&mut buf, read_offset as u64) {
                         report_error(
                             PgSqlErrorCode::ERRCODE_FDW_ERROR,
-                            &format!("error reading f32 at offset {read_offset} bytes: {err}"),
+                            &format!("error reading str at offset {read_offset} bytes: {err}"),
                         );
                         return None;
                     };
+                    log::trace!(target: "db721_read", "{colname} str read offset {read_offset} {buf:?}");
                     let null_pos = buf.iter().position(|c| *c == 0).expect("No null char");
-                    let cstr = std::ffi::CStr::from_bytes_with_nul(&buf[..null_pos + 1]).unwrap();
-                    let val = cstr.to_string_lossy().to_string();
-                    row.push(colname, Some(Cell::String(val)));
+                    row.push(
+                        colname,
+                        Some(Cell::PgString(PgString::from_slice(&buf[..null_pos + 1]))),
+                    );
                 }
             }
         }
-        self.row_cnt += 1;
-        // return 'None' to stop data scan
+        reader.row_cnt += 1;
         Some(())
     }
 
     fn end_scan(&mut self) {
-        self.db721_file.take();
+        self.reader.take();
         // we do nothing here, but you can do things like resource cleanup and etc.
     }
 }
