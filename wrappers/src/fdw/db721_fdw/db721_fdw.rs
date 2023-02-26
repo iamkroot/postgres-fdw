@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::unix::prelude::FileExt;
 use std::str::FromStr;
 
 use pgx::PgSqlErrorCode;
@@ -112,7 +111,7 @@ impl CustomQual {
 }
 
 struct Db721Reader {
-    file: std::fs::File,
+    mmap: memmap2::Mmap,
     metadata: Metadata,
     num_blocks: u32,
 
@@ -192,7 +191,7 @@ impl Db721Reader {
             .num_blocks;
 
         let mut reader = Self {
-            file: db721_file.file,
+            mmap: unsafe { memmap2::Mmap::map(&db721_file.file).unwrap() },
             metadata: db721_file.metadata,
             num_blocks,
             cols: cols.to_vec(),
@@ -208,7 +207,7 @@ impl Db721Reader {
         }
         if block_num >= num_blocks {
             // filtered out all the rows!
-            log::info!("Filtered out all the rows!");
+            log::debug!("Filtered out all the rows!");
             return Err(());
         }
         reader.block_num = block_num;
@@ -221,39 +220,24 @@ impl Db721Reader {
             Cell::F32(v) => {
                 const FIELD_SIZE: usize = 4;
                 let mut buf = [0; FIELD_SIZE];
-                if let Err(err) = self.file.read_exact_at(&mut buf, read_offset) {
-                    report_error(
-                        PgSqlErrorCode::ERRCODE_FDW_ERROR,
-                        &format!("error reading f32 at offset {read_offset} bytes: {err}"),
-                    );
-                    return None;
-                };
-                *v = f32::from_le_bytes(buf);
+                buf.copy_from_slice(
+                    &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE],
+                );
+                *v = f32::from_ne_bytes(buf);
                 log::trace!(target: "db721_read", "float read offset {read_offset} {buf:?} {}", *v);
             }
             Cell::I32(v) => {
                 const FIELD_SIZE: usize = 4;
                 let mut buf = [0; FIELD_SIZE];
-                if let Err(err) = self.file.read_exact_at(&mut buf, read_offset) {
-                    report_error(
-                        PgSqlErrorCode::ERRCODE_FDW_ERROR,
-                        &format!("error reading i32 at offset {read_offset} bytes: {err}"),
-                    );
-                    return None;
-                };
-                *v = i32::from_le_bytes(buf);
+                buf.copy_from_slice(
+                    &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE],
+                );
+                *v = i32::from_ne_bytes(buf);
                 log::trace!(target: "db721_read", "int read offset {read_offset} {buf:?} {}", *v);
             }
             Cell::PgString(v) => {
                 const FIELD_SIZE: usize = 32;
-                let mut buf = [0; FIELD_SIZE];
-                if let Err(err) = self.file.read_exact_at(&mut buf, read_offset) {
-                    report_error(
-                        PgSqlErrorCode::ERRCODE_FDW_ERROR,
-                        &format!("error reading str at offset {read_offset} bytes: {err}"),
-                    );
-                    return None;
-                };
+                let buf = &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE];
                 log::trace!(target: "db721_read", "str read offset {read_offset} {buf:?}");
                 let null_pos = buf.iter().position(|c| *c == 0).expect("No null char");
                 *v = PgString::from_slice(&buf[..null_pos]);
