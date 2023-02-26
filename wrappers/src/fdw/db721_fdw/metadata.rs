@@ -35,6 +35,16 @@ pub(crate) enum Stats {
     #[serde(rename = "str")]
     Str(BSS<String>),
 }
+impl Stats {
+    pub(crate) fn num_rows_in_block(&self, block_num: u32) -> Option<u32> {
+        match self {
+            Stats::Float(BSS { block_stats }) => block_stats.get(&block_num).map(|v| v.num),
+            Stats::Int(BSS { block_stats }) => block_stats.get(&block_num).map(|v| v.num),
+            Stats::Str(BSS { block_stats }) => block_stats.get(&block_num).map(|v| v.num),
+        }
+    }
+}
+
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Column {
@@ -67,6 +77,9 @@ impl Metadata {
             Stats::Int(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
             Stats::Str(BSS { block_stats }) => block_stats.values().map(|v| v.num as u64).sum(),
         }
+    }
+    pub(crate) fn num_rows_in_block(&self, block_num: u32) -> u32 {
+        self.columns.values().next().unwrap().block_stats.num_rows_in_block(block_num).unwrap()
     }
 }
 

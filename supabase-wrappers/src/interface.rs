@@ -43,6 +43,9 @@ impl PgString {
     pub fn from_slice(slice: &[u8]) -> Self {
         Self(pgx::varlena::rust_byte_slice_to_bytea(slice))
     }
+    pub fn to_slice(&self) -> &[u8] {
+        unsafe { pgx::varlena_to_byte_slice(self.0.as_ptr()) }
+    }
 }
 
 impl std::fmt::Debug for PgString {
