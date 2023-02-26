@@ -118,7 +118,8 @@ struct Db721Reader {
     // query specific
     cols: Vec<String>,
     limit: Limit,
-    quals: HashMap<String, CustomQual>,
+    quals: HashMap<String, (usize, CustomQual)>,
+    non_pred_cols: Vec<(usize, String)>,
 
     // scan state
     row_cnt: i64,
@@ -178,10 +179,21 @@ impl Db721Reader {
                     report_error(PgSqlErrorCode::ERRCODE_FDW_ERROR, &format!("unsupported rhs in qual: {q:?}"));
                     return Err(());
                 };
-                qs.insert(q.field.clone(), CustomQual { op, rhs });
+                qs.insert(
+                    q.field.clone(),
+                    (
+                        cols.iter().position(|f| f == &q.field).unwrap(),
+                        CustomQual { op, rhs },
+                    ),
+                );
             }
             qs
         };
+        let non_pred_cols = cols
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| (!quals.contains_key(c)).then(|| (i, c.clone())))
+            .collect();
         let num_blocks = db721_file
             .metadata
             .columns
@@ -200,6 +212,7 @@ impl Db721Reader {
             cols: cols.to_vec(),
             limit,
             quals,
+            non_pred_cols,
             row_cnt: 0,
             block_num: 0,
             block_row_num: 0,
@@ -217,54 +230,43 @@ impl Db721Reader {
         Ok(reader)
     }
 
-    /// Low-level, read the value from file
-    fn read_val(&self, read_offset: u64, res: &mut Cell) -> Option<()> {
-        match res {
-            Cell::F32(v) => {
+    /// Read the val specified by self.block_row_num
+    fn read_cur_val(&self, col: &Column, out: &mut Cell) -> Option<()> {
+        let abs_row_num = self.metadata.max_vals_per_block * self.block_num + self.block_row_num;
+        let read_offset = col.start_offset + abs_row_num * col.field_size();
+        match col.block_stats {
+            Stats::Float(_) => {
                 const FIELD_SIZE: usize = 4;
                 let mut buf = [0; FIELD_SIZE];
                 buf.copy_from_slice(
                     &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE],
                 );
-                *v = f32::from_ne_bytes(buf);
-                log::trace!(target: "db721_read", "float read offset {read_offset} {buf:?} {}", *v);
+                *out = Cell::F32(f32::from_ne_bytes(buf));
+                log::trace!(target: "db721_read", "float read offset {read_offset} {buf:?} {out}");
             }
-            Cell::I32(v) => {
+            Stats::Int(_) => {
                 const FIELD_SIZE: usize = 4;
                 let mut buf = [0; FIELD_SIZE];
                 buf.copy_from_slice(
                     &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE],
                 );
-                *v = i32::from_ne_bytes(buf);
-                log::trace!(target: "db721_read", "int read offset {read_offset} {buf:?} {}", *v);
+                *out = Cell::I32(i32::from_ne_bytes(buf));
+                log::trace!(target: "db721_read", "int read offset {read_offset} {buf:?} {out}");
             }
-            Cell::PgString(v) => {
+            Stats::Str(_) => {
                 const FIELD_SIZE: usize = 32;
                 let buf = &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE];
-                log::trace!(target: "db721_read", "str read offset {read_offset} {buf:?}");
                 let null_pos = buf.iter().position(|c| *c == 0).expect("No null char");
-                *v = PgString::from_slice(&buf[..null_pos]);
+                *out = Cell::PgString(PgString::from_slice(&buf[..null_pos]));
+                log::trace!(target: "db721_read", "str read offset {read_offset} {buf:?}");
             }
-            _ => return None,
         }
         Some(())
     }
 
-    /// Read the val specified by self.block_cnt and self.
-    fn read_cur_val(&self, col: &Column) -> Option<Cell> {
-        let (field_size, mut out) = match &col.block_stats {
-            Stats::Float(_) => (4, Cell::F32(0.0)),
-            Stats::Int(_) => (4, Cell::F32(0.0)),
-            Stats::Str(_) => (32, Cell::PgString(PgString::from_slice(&[]))),
-        };
-        let abs_row_num = self.metadata.max_vals_per_block * self.block_num + self.block_row_num;
-        let read_offset = col.start_offset + abs_row_num * field_size;
-        self.read_val(read_offset as u64, &mut out).map(|_| out)
-    }
-
     /// Determine if the block is to be read, skipping over the ones filtered out by predicate pushdown.
     fn skip_block(&self, block_num: u32) -> bool {
-        self.quals.iter().any(|(pred_colname, q)| {
+        self.quals.iter().any(|(pred_colname, (_, q))| {
             let col = self.metadata.columns.get(pred_colname).unwrap();
             match &col.block_stats {
                 Stats::Float(BSS { block_stats }) => {
@@ -382,24 +384,34 @@ impl ForeignDataWrapper for Db721Fdw {
             log::trace!(target: "exec", "{num_rows} rows in block {}", reader.block_num);
             while reader.block_row_num < num_rows {
                 let mut all_passed = true;
-                for colname in &reader.cols {
+                // row.cols is not really needed by postgres, just init it to default.
+                row.cols.resize_with(reader.cols.len(), Default::default);
+                // init row.cells
+                row.cells.resize(reader.cols.len(), Some(Cell::I32(0)));
+                for (colname, (i, q)) in &reader.quals {
                     let col = reader.metadata.columns.get(colname).unwrap();
-                    let val = reader.read_cur_val(col)?;
-                    let qual = reader.quals.get(colname);
-                    if !qual.map_or(true, |q| q.eval(&val)) {
+                    let cell = &mut row.cells[*i];
+                    let cell = cell.as_mut().unwrap();
+                    reader.read_cur_val(col, cell)?;
+                    if !q.eval(&cell) {
                         // row does not statisfy the predicate
-                        log::trace!(target: "exec", "val {val} filtered out");
-                        row.clear();
+                        log::trace!(target: "exec", "val {cell} filtered out");
                         all_passed = false;
                         break;
-                    } else {
-                        row.push(colname, Some(val));
                     }
                 }
-                reader.block_row_num += 1;
                 if all_passed {
+                    for (i, colname) in &reader.non_pred_cols {
+                        let col = reader.metadata.columns.get(colname).unwrap();
+                        let cell = &mut row.cells[*i];
+                        let cell = cell.as_mut().unwrap();
+                        reader.read_cur_val(col, cell)?;
+                    }
+                    reader.block_row_num += 1;
                     reader.row_cnt += 1;
                     return Some(());
+                } else {
+                    reader.block_row_num += 1;
                 }
             }
             // end of current block, try next one
