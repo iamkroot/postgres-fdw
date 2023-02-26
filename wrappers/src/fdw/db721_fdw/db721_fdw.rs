@@ -7,7 +7,7 @@ use supabase_wrappers::prelude::*;
 use super::metadata::{Column, Metadata, Stats, BSS};
 use super::parser::parse_file;
 
-// A simple demo FDW
+/// FDW for the [DB721 file format](https://15721.courses.cs.cmu.edu/spring2023/project1.html).
 #[wrappers_fdw(
     version = "0.1.0",
     author = "iamkroot",
@@ -85,27 +85,20 @@ impl CustomQual {
     /// Evaluate the predicate on the given value.
     /// Return true if `lhs` satisfies the predicate.
     fn eval(&self, lhs: &Cell) -> bool {
-        match lhs {
-            Cell::F32(lhs) => {
-                let PolyVal::Float(rhs) = self.rhs else {
-                    panic!("data type mismatch!");
-                };
-                self.op.eval(*lhs, rhs)
+        match (lhs, &self.rhs) {
+            (Cell::F32(lhs), PolyVal::Float(rhs)) => self.op.eval(*lhs, *rhs),
+            (Cell::I32(lhs), PolyVal::Int(rhs)) => self.op.eval(*lhs, *rhs),
+
+            (Cell::PgString(lhs), PolyVal::Str(rhs)) => {
+                self.op.eval(lhs.to_slice(), rhs.as_bytes())
             }
-            Cell::I32(lhs) => {
-                let PolyVal::Int(rhs) = self.rhs else {
-                    panic!("data type mismatch!");
-                };
-                self.op.eval(*lhs, rhs)
+            (Cell::String(lhs), PolyVal::Str(rhs)) => self.op.eval(lhs, rhs),
+            (lhs, rhs) => {
+                report_warning(&format!(
+                    "Unsupported data types in predicate! {lhs}, {rhs:?}"
+                ));
+                false
             }
-            Cell::PgString(lhs) => {
-                let PolyVal::Str(rhs) = &self.rhs else {
-                    panic!("data type mismatch!");
-                };
-                let res = self.op.eval(lhs.to_slice(), rhs.as_bytes());
-                res
-            }
-            _ => panic!(),
         }
     }
 }
@@ -144,6 +137,12 @@ impl Db721Reader {
                 return Err(());
             }
         };
+        assert!(cols
+            .iter()
+            .all(|c| db721_file.metadata.columns.contains_key(c)));
+        assert!(quals
+            .iter()
+            .all(|q| db721_file.metadata.columns.contains_key(&q.field)));
         let num_rows = db721_file.metadata.num_rows() as i64;
         let limit = limit
             .clone()
@@ -231,7 +230,7 @@ impl Db721Reader {
     }
 
     /// Read the val specified by self.block_row_num
-    fn read_cur_val(&self, col: &Column, out: &mut Cell) -> Option<()> {
+    fn read_cur_val(&self, col: &Column, out: &mut Cell) {
         let abs_row_num = self.metadata.max_vals_per_block * self.block_num + self.block_row_num;
         let read_offset = col.start_offset + abs_row_num * col.field_size();
         match col.block_stats {
@@ -257,11 +256,11 @@ impl Db721Reader {
                 const FIELD_SIZE: usize = 32;
                 let buf = &self.mmap[read_offset as usize..read_offset as usize + FIELD_SIZE];
                 let null_pos = buf.iter().position(|c| *c == 0).expect("No null char");
+                // *out = Cell::String(String::from_utf8_lossy(&buf[..null_pos]).to_string());
                 *out = Cell::PgString(PgString::from_slice(&buf[..null_pos]));
                 log::trace!(target: "db721_read", "str read offset {read_offset} {buf:?}");
             }
         }
-        Some(())
     }
 
     /// Determine if the block is to be read, skipping over the ones filtered out by predicate pushdown.
@@ -332,9 +331,6 @@ impl Db721Reader {
 }
 
 impl ForeignDataWrapper for Db721Fdw {
-    // You can do any initalization in this new() function, like saving connection
-    // info or API url in an variable, but don't do any heavy works like making a
-    // database connection or API call.
     fn new(_options: &HashMap<String, String>) -> Self {
         static mut LOG_INIT: bool = false;
         if unsafe { !LOG_INIT } {
@@ -373,9 +369,7 @@ impl ForeignDataWrapper for Db721Fdw {
     }
 
     fn iter_scan(&mut self, row: &mut Row) -> Option<()> {
-        let Some(reader) = self.reader.as_mut() else {
-            return None;
-        };
+        let reader = self.reader.as_mut()?;
         if reader.row_cnt >= reader.limit.count {
             return None;
         }
@@ -392,7 +386,7 @@ impl ForeignDataWrapper for Db721Fdw {
                     let col = reader.metadata.columns.get(colname).unwrap();
                     let cell = &mut row.cells[*i];
                     let cell = cell.as_mut().unwrap();
-                    reader.read_cur_val(col, cell)?;
+                    reader.read_cur_val(col, cell);
                     if !q.eval(&cell) {
                         // row does not statisfy the predicate
                         log::trace!(target: "exec", "val {cell} filtered out");
@@ -405,7 +399,7 @@ impl ForeignDataWrapper for Db721Fdw {
                         let col = reader.metadata.columns.get(colname).unwrap();
                         let cell = &mut row.cells[*i];
                         let cell = cell.as_mut().unwrap();
-                        reader.read_cur_val(col, cell)?;
+                        reader.read_cur_val(col, cell);
                     }
                     reader.block_row_num += 1;
                     reader.row_cnt += 1;
