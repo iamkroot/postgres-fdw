@@ -16,7 +16,6 @@ pg15 = ["pgx/pg15", "pgx-tests/pg15", "supabase-wrappers/pg15" ]
 pg_test = []
 
 helloworld_fdw = []
-db721_fdw = ["serde_json", "serde/derive", "env_logger", "log", "memmap2"]
 
 bigquery_fdw = ["gcp-bigquery-client", "time", "serde_json", "serde", "wiremock", "futures", "yup-oauth2"]
 clickhouse_fdw = ["clickhouse-rs", "chrono", "time"]
@@ -58,10 +57,6 @@ regex = { version = "1", optional = true }
 
 # for airtable_fdw
 url = { version = "2.3", optional = true }
-
-env_logger = { version = "*", optional = true }
-log = { version = "*", optional = true, features = ["release_max_level_info"] }
-memmap2 = { version = "0.5", optional = true }
 
 [dev-dependencies]
 pgx-tests = "=0.6.1"

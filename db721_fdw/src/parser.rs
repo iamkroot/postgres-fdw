@@ -41,7 +41,7 @@ mod tests {
             .filter_level(log::LevelFilter::Trace)
             .is_test(true)
             .init();
-        let data_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/data-farms.db721");
+        let data_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/data-farms.db721");
         parse_file(data_path).unwrap();
     }
 }

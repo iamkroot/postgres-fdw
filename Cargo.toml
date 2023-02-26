@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "supabase-wrappers",
+    "db721_fdw"
 ]
 exclude = [
     "wrappers",

@@ -1,7 +1,8 @@
 # CMU DB 721 Foreign Data Wrapper
+Written in Rust using [Supabase Wrappers](https://github.com/supabase/wrappers).
 
 ### Setup schema
-Adapted from [chicken_farm_schema.sql](https://github.com/cmu-db/postgres/blob/bab87667d83e56fb8a6c01daed81a2c8af7095ad/cmudb/extensions/db721_fdw/chicken_farm_schema.sql) on cmudb's fork and [helloworld_fdw](../helloworld_fdw/README.md).
+Adapted from [chicken_farm_schema.sql](https://github.com/cmu-db/postgres/blob/bab87667d83e56fb8a6c01daed81a2c8af7095ad/cmudb/extensions/db721_fdw/chicken_farm_schema.sql) on cmudb's fork and [helloworld_fdw](https://github.com/supabase/wrappers/tree/main/wrappers/src/fdw/helloworld_fdw/README.md).
 
 ```sql
 CREATE TABLE IF NOT EXISTS farm
@@ -23,10 +24,10 @@ CREATE TABLE IF NOT EXISTS chicken
     notes           varchar
 );
 
-\COPY farm FROM '$CHANGE_THIS_PATH/data-farms.csv' CSV HEADER;
-\COPY chicken FROM '$CHANGE_THIS_PATH/data-chickens.csv' CSV HEADER;
+\COPY farm FROM '$PWD/data/data-farms.csv' CSV HEADER;
+COPY chicken FROM '$PWD/data/data-chickens.csv' CSV HEADER;
 
-CREATE EXTENSION IF NOT EXISTS wrappers;
+CREATE EXTENSION IF NOT EXISTS db721_fdw;
 
 -- create foreign data wrapper and enable 'DB721Fdw'
 CREATE FOREIGN DATA WRAPPER db721_wrapper
@@ -45,7 +46,7 @@ CREATE FOREIGN TABLE IF NOT EXISTS db721_farm
     max_age_weeks   float4
 ) SERVER db721_server OPTIONS
 (
-    filename '$CHANGE_THIS_PATH/data-farms.db721',
+    filename '$PWD/data/data-farms.db721',
     tablename 'Farm'
 );
 CREATE FOREIGN TABLE IF NOT EXISTS db721_chicken (
@@ -58,7 +59,7 @@ CREATE FOREIGN TABLE IF NOT EXISTS db721_chicken (
     notes           varchar
 ) SERVER db721_server OPTIONS
 (
-    filename '$CHANGE_THIS_PATH/data-chickens.db721',
+    filename '$PWD/data/data-chickens.db721',
     tablename 'Chicken'
 );
 ```

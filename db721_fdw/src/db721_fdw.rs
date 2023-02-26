@@ -11,7 +11,7 @@ use super::parser::parse_file;
 #[wrappers_fdw(
     version = "0.1.0",
     author = "iamkroot",
-    website = "https://github.com/iamkroot/postgres-fdw/tree/db721/wrappers/src/fdw/db721_fdw"
+    website = "https://github.com/iamkroot/postgres-fdw/tree/db721/db721_fdw"
 )]
 pub(crate) struct Db721Fdw {
     reader: Option<Db721Reader>,
